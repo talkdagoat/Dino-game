@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Chrome Dino Game - 100% Fixed</title>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; background-color: #f7f7f7; font-family: monospace; user-select: none; touch-action: none; overflow: hidden; }
+        #game-box { position: relative; width: 100%; max-width: 600px; height: 150px; background: transparent; }
+        canvas { display: block; border-bottom: 2px solid #535353; width: 100%; height: 100%; }
+        
+        /* Interactive overlay fix for silent initialization bugs */
+        #start-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(247,247,247,0.9); z-index: 100; display: flex; flex-direction: column; justify-content: center; align-items: center; color: #535353; font-weight: bold; cursor: pointer; text-align: center; }
+        
+        #hud-scores { position: absolute; top: 10px; right: 10px; display: flex; gap: 15px; font-size: 14px; font-weight: bold; color: #535353; pointer-events: none; z-index: 10; }
+        #game-over { display: none; position: absolute; top: 45%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: #535353; z-index: 20; }
+        #game-over button { background: #535353; color: white; border: none; padding: 8px 16px; font-weight: bold; font-family: inherit; border-radius: 4px; cursor: pointer; margin-top: 10px; pointer-events: auto; }
+    </style>
+</head>
+<body>
+
+    <div id="game-box">
+        <!-- Interactive trigger ensures graphics engines initiate safely -->
+        <div id="start-overlay">
+            <div style="font-size: 24px; margin-bottom: 5px;">🦖</div>
+            CLICK OR TAP HERE TO PLAY
+        </div>
+
+        <div id="hud-scores">
+            <div id="hi-score">HI 00000</div>
+            <div id="score">00000</div>
+        </div>
+
+        <div id="game-over">
+            <h1 style="font-size: 20px; margin: 0; letter-spacing: 2px;">G A M E  O V E R</h1>
+            <button id="restart-btn">RESTART</button>
+        </div>
+
+        <canvas id="dinoCanvas"></canvas>
+    </div>
+
+<script>
+    const canvas = document.getElementById("dinoCanvas");
+    const ctx = canvas.getContext("2d");
+    
+    // Internal base resolution parameters
+    canvas.width = 600;
+    canvas.height = 150;
+
+    let score = 0;
+    let highScore = localStorage.getItem("dino_hi_fixed") || 0;
+    let isGameOver = false;
+    let gameActive = false;
+    let speed = 6;
+    let spawnTimer = 0;
+
+    // Reset tracking counters
+    document.getElementById("hi-score").innerText = `HI ${String(highScore).padStart(5, '0')}`;
+
+    let dino = { x: 40, y: 110, w: 22, h: 24, vy: 0, gravity: 0.6, jump: -9.5, grounded: true, legToggle: false, timer: 0 };
+    let obstacles = [];
+
+    // Interactive safe unlock gate
+    document.getElementById("start-overlay").addEventListener("pointerdown", function() {
+        this.style.display = "none";
+        gameActive = true;
+        triggerJump();
+    });
+
+    // Handle universal trigger parameters
+    window.addEventListener("keydown", (e) => {
+        if ([" ", "arrowup", "w"].includes(e.key.toLowerCase())) {
+            e.preventDefault();
+            triggerJump();
+        }
+    });
+
+    canvas.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        triggerJump();
+    });
+
+    document.getElementById("restart-btn").addEventListener("click", (e) => {
+        e.stopPropagation();
+        resetGame();
+    });
+
+    function triggerJump() {
+        if (!gameActive || isGameOver) return;
+        if (dino.grounded) {
+            dino.vy = dino.jump;
+            dino.grounded = false;
+            playAudioBeep(330, 0.05); // Native synthesized jump tone
+        }
+    }
+
+    function createObstacle() {
+        // Randomly choose single tall brick or multiple short ones
+        let isTall = Math.random() > 0.5;
+        obstacles.push({
+            x: canvas.width,
+            y: isTall ? 104 : 114,
+            w: isTall ? 12 : 20,
+            h: isTall ? 30 : 20
+        });
+    }
+
+    function update() {
+        if (!gameActive || isGameOver) return;
+
+        score += 0.15;
+        speed += 0.001;
+        document.getElementById("score").innerText = String(Math.floor(score)).padStart(5, '0');
+
+        // Apply physics
+        dino.vy += dino.gravity;
+        dino.y += dino.vy;
+
+        if (dino.y >= 110) {
+            dino.y = 110;
+            dino.vy = 0;
+            dino.grounded = true;
+        }
+
+        // Animate legs
+        dino.timer++;
+        if (dino.timer % 8 === 0) dino.legToggle = !dino.legToggle;
+
+        // Obstacle manager ticker
+        spawnTimer++;
+        let dynamicGap = Math.max(45, 80 - Math.floor(speed * 1.5));
+        if (spawnTimer > dynamicGap + Math.random() * 50) {
+            createObstacle();
+            spawnTimer = 0;
+        }
+
+        // Advance layout arrays
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+            let o = obstacles[i];
+            o.x -= speed;
+
+            if (o.x + o.w < 0) {
+                obstacles.splice(i, 1);
+                continue;
+            }
+
+            // Simple box collision detection matching pixel layouts
+            if (dino.x < o.x + o.w &&
+                dino.x + dino.w > o.x &&
+                dino.y < o.y + o.h &&
+                dino.y + dino.h > o.y) {
+                triggerGameOver();
+            }
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#535353";
+
+        // 1. Draw Player Character Dino Mesh Blocks
+        ctx.fillRect(dino.x + 4, dino.y, 14, 12); // Snout/Head
+        ctx.fillRect(dino.x, dino.y + 8, 12, 10); // Body core
+        
+        // Eye extraction cutout line
+        ctx.fillStyle = "#f7f7f7";
+        ctx.fillRect(dino.x + 12, dino.y + 2, 2, 2);
+        ctx.fillStyle = "#535353"; // Restore color configuration
+
+        if (dino.grounded) {
+            if (dino.legToggle) {
+                ctx.fillRect(dino.x + 2, dino.y + 18, 3, 6);
+                ctx.fillRect(dino.x + 10, dino.y + 18, 3, 3);
+            } else {
+                ctx.fillRect(dino.x + 2, dino.y + 18, 3, 3);
+                ctx.fillRect(dino.x + 10, dino.y + 18, 3, 6);
+            }
+        } else {
+            ctx.fillRect(dino.x + 2, dino.y + 18, 3, 4);
+            ctx.fillRect(dino.x + 10, dino.y + 18, 3, 4);
+        }
+
+        // 2. Draw Active Spawning Obstacles Array
+        obstacles.forEach(o => {
+            ctx.fillRect(o.x, o.y, o.w, o.h);
+        });
+
+        // 3. Static Floor Guide Line
+        ctx.fillRect(0, 134, canvas.width, 1);
+    }
+
+    function triggerGameOver() {
+        isGameOver = true;
+        document.getElementById("game-over").style.display = "block";
+        playAudioBeep(100, 0.2); // Low-pass buzzer tone for collisions
+
+        if (score > highScore) {
+            highScore = Math.floor(score);
+            localStorage.setItem("dino_hi_fixed", highScore);
+            document.getElementById("hi-score").innerText = `HI ${String(highScore).padStart(5, '0')}`;
+        }
+    }
+
+    function resetGame() {
+        score = 0;
+        isGameOver = false;
+        speed = 6;
+        spawnTimer = 0;
+        obstacles = [];
+        dino.y = 110;
+        dino.vy = 0;
+        dino.grounded = true;
+        document.getElementById("game-over").style.display = "none";
+    }
+
+    // Built-in audio generator (bypasses browser silent audio safety locks)
+    function playAudioBeep(freq, length) {
+        try {
+            let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            let osc = audioCtx.createOscillator();
+            let gain = audioCtx.createGain();
+            osc.type = "square";
+            osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + length);
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.start(); osc.stop(audioCtx.currentTime + length);
+        } catch(e){}
+    }
+
+    function mainEngineLoop() {
+        update();
+        draw();
+        requestAnimationFrame(mainEngineLoop);
+    }
+
+    mainEngineLoop();
+</script>
+</body>
+</html>
